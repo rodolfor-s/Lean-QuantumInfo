@@ -33,6 +33,7 @@ Based on Hiai's Lectures on Selected Topics in von Neumann Algebras:
   - see also `E →SWOT[σ] F`
   - `σ` is probably something like 'complex conjugate' is for `𝕜`
 3. ⊘ Ultraweak (σ-weak) operator topology
+  - Not in Mathlib.
 -/
 
 /-
@@ -58,17 +59,17 @@ and every WOT-closed set is SOT-closed.
 theorem says weakly closed ⇔ strongly closed ⇔ `M'' = M`.
 
 **Who might use this? (proposals, to be decided together)**
-* *QuantumInfo, infinite-dimensional states.* Hiai §1.3 defines normal
+- *QuantumInfo, infinite-dimensional states.* Hiai §1.3 defines normal
   states through the σ-weak topology, which agrees with the WOT on bounded
   sets. Comparing SOT and WOT now could be a stepping stone towards normal
   states (and towards reviving `QuantumInfo/InfiniteDim/QState.lean`).
-* *A bridge to `QuantumInfo/Finite`.* On `B(ℂ^d)` all these topologies
+- *A bridge to `QuantumInfo/Finite`.* On `B(ℂ^d)` all these topologies
   coincide. One possible sanity target: `MState d` should be exactly the
   normal states on `⊤ : VonNeumannAlgebra (EuclideanSpace ℂ d)`.
-* *Physlib.* Algebraic QM / QFT (nets of von Neumann algebras) and
+- *Physlib.* Algebraic QM / QFT (nets of von Neumann algebras) and
   equilibrium states in statistical mechanics (KMS states, Hiai §2.2) are
   stated with these topologies. Whether Physlib wants them is to be checked.
-* *Mathlib (secondary).* `Mathlib/Analysis/VonNeumannAlgebra/Basic.lean`
+- *Mathlib (secondary).* `Mathlib/Analysis/VonNeumannAlgebra/Basic.lean`
   lists the double commutant theorem as a TODO, and SOT ↔ WOT is one of its
   ingredients.
 
@@ -121,12 +122,141 @@ section Exercise1
 
 variable {H : Type*} [NormedAddCommGroup H] [InnerProductSpace ℂ H]
 
-/-- First draft (critique and replace me): the identity map from `B(H)` with
+/- How does Mathlib handle pointwise convergence topology?
+- PointwiseConvergence topology is the name Mathlib claims to give to the Strong
+  Operator Topology. Since the topological space in question is of operators,
+  they have underlying function types, and corresponding coercions.
+  - Say, `A : E → F` is the underlying function type.
+- So an alias is created for that function type, and an instance of
+  TopologicalSpace is given for that alias. See
+  `UniformConvergenceTopology.lean`
+
+How does the construction work?
+- The codomain `F` is given as a topological space, and the topology of the
+  domain `E` is the induced one by `A`: `(E →[withTop] F).induced A`.
+  - The `induced` function is of type
+    `(X → Y) → TopologicalSpace Y → TopologicalSpace X`
+  - The way `induced` is invoked is as a pullback
+- This construction is invoked for `E →SL[σ] F`, to bring the topology from
+  `E →ᵤ[𝔖] F`, where the latter is a type alias with uniform topology.
+-/
+
+/-- Claude: the identity map from `B(H)` with
 the SOT to `B(H)` with the WOT is continuous. -/
 theorem continuous_SOT_to_WOT :
     Continuous (fun A : H →Lₚₜ[ℂ] H => ContinuousLinearMap.toWOT (RingHom.id ℂ) H H A) := by
   sorry
 
--- Your API here.
+/-
+1. Classification of factors
+  - Factors through Murray-von Neumann projection theory
+  - TODO: Define projections, and MvN equivalence, and MvN order
+  - TODO: Define factors
+2. Approximate finite-dimensionality
+3. Uniqueness of purifications
+    - Topological order:
+      - Transportability: line-defect unitary that introduces a state from a reference, only depends on endpoints.
+      - Detectability: a loop enclosing one endpoint, a projection based on that loop detects the...
+    - Equivalence with Haag duality
+      - From this equivalence, we can show that tomographic completeness can hold without Haag duality holding
+
+- TODO: Define Haag duality. For factors M_A and M_B ⊆ B(H), M_A = M_B'
+  - For M_B' the commutant of M_B
+-/
+
+-- def HaagDuality : A = B' := sorry
+
+-- theorem UniqOfPure (Ψ Φ : Hilb) (h : ψ_A = φ_A) : ∀ ε > 0, ∃ u_B, ‖Ψ - u_B Φ‖ < ε := by sorry
+
+-- theorem (A B : vNAlgebra(H)) (h : [A, B] = 0) : UniqOfPure ↔ A = B' := by sorry
 
 end Exercise1
+
+/-! ## Exercise 2: the network around the double commutant theorem
+
+**Nothing in this exercise is to be proved.** The deliverable is the
+*infrastructure and the network*: definitions, and theorem statements that
+stay `sorry` (the file compiles with `sorry` warnings, and that is the
+expected end state). Judge your work by whether someone else could later pick
+any one `sorry` and prove it without redesigning anything.
+
+**Math.** Let `M ⊆ B(H)` be a *-subalgebra with `1 ∈ M`. The commutant of
+`S ⊆ B(H)` is `S' = {a | ∀ b ∈ S, a b = b a}` and `S'' = (S')'`.
+The double commutant (von Neumann density) theorem says the following are
+equivalent: (i) `M` is weakly closed; (ii) `M` is strongly closed;
+(iii) `M'' = M`.
+
+**Reference.** Hiai §1.2 (p. 2) states exactly this. The Kaplansky density
+theorem (same page) is the natural next node of the network. Mathlib's
+`VonNeumannAlgebra` takes (iii) as its *definition*
+(`centralizer_centralizer'`) and lists (i)/(ii) ⇔ (iii) as an open TODO, so
+the theorem is precisely the missing bridge between Mathlib and Hiai.
+
+**Who might use this? (proposals, to be decided together)**
+* *Finite-dimensional bridge.* `⊤ : VonNeumannAlgebra (EuclideanSpace ℂ d)`
+  and its subalgebras: every unital *-subalgebra of `B(ℂ^d)` is closed in
+  all topologies, so it satisfies (i)-(iii). This is a test target for the
+  network.
+* *Constructing von Neumann algebras.* Generated algebras, commutants and
+  fixed points of a symmetry are most naturally shown to be von Neumann
+  algebras via (i) or (ii), not (iii).
+* *Haag duality and the notes above.* Every statement of the form `A = B'`
+  lives on top of the commutant vocabulary chosen here.
+* *Mathlib (secondary).* Closing the TODO in
+  `Mathlib/Analysis/VonNeumannAlgebra/Basic.lean`.
+
+**The exercise: design the network.**
+1. *Vocabulary.* Decide what objects the statements are about (a `Set`, a
+   `StarSubalgebra`, a Mathlib `VonNeumannAlgebra`?), how to name (i)-(iii)
+   (predicates? `IsClosed` on a topology type copy?), and whether to reuse
+   `Set.centralizer` or introduce a commutant notation. Record the choice.
+2. *The main statement.* State the theorem in the form you think users
+   want. Try at least two packagings (e.g. three implications versus one
+   equivalence) and keep the one that is easier to *use*.
+3. *Decompose the hard implication.* The proof of (ii) ⇒ (iii) is not a
+   single step. Without proving anything, write the intermediate
+   statements it would need as separate declarations (each ending in
+   `sorry`), and say which earlier declaration each one uses. Aim for pieces
+   that are useful on their own, not just lemmas of one proof.
+4. *Connect to what exists.* Add the statements linking the new notions
+   to Mathlib's `VonNeumannAlgebra`, to Exercise 1, and to the
+   finite-dimensional test target.
+5. *Dependency map.* Put a short comment block above your declarations
+   listing, for each, the declarations it depends on. Mark which `sorry`s
+   look easy, medium or hard, and which would be a Mathlib-level project.
+6. *Design notes.* Record the decisions of steps 1-4, and anything you
+   would do differently if you had to redo the vocabulary.
+
+**Hints** (open one at a time; these are about design, not proofs).
+1. *Precedent.* `Set.centralizer`, `VonNeumannAlgebra.commutant` and
+   `VonNeumannAlgebra.mem_commutant_iff` already exist; read how Mathlib
+   states `centralizer_centralizer` for a structure before inventing
+   notation. `List.TFAE` is Mathlib's standard packaging for "the following
+   are equivalent".
+2. *Where is the difficulty?* The math has two different mechanisms:
+   an *elementary* one (commutants are weakly closed) and a *cyclic-subspace*
+   one (the projection onto the closure of `M x` lies in `M'`). The second
+   has to pass from one vector to finitely many through the amplification
+   `H ⊕ ⋯ ⊕ H`. Ask which of these deserve their own named objects, and
+   where they should live.
+3. *What a strong neighbourhood is.*
+   `PointwiseConvergenceCLM.hasBasis_nhds_zero` describes neighbourhoods by
+   finite sets of vectors; "closure in the SOT" can be stated with it as an
+   approximation criterion on finitely many vectors. Whether that criterion
+   is a lemma or a definition is a design decision.
+4. *Orthogonal projections.* `Submodule.starProjection` and
+   `IsStarProjection` give the projection onto a closed subspace; note that
+   it needs completeness of the subspace, hence a hypothesis on `H`.
+
+**Lean skills practiced.** Choosing between predicate/structure/type-class
+vocabularies; `List.TFAE`; writing statements as interface contracts;
+tracking dependencies between declarations; leaving `sorry`s deliberately.
+-/
+
+section Exercise2
+
+variable {H : Type*} [NormedAddCommGroup H] [InnerProductSpace ℂ H] [CompleteSpace H]
+
+-- Your vocabulary and network here.
+
+end Exercise2
