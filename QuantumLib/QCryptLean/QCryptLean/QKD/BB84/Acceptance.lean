@@ -1,0 +1,534 @@
+import QCryptLean.LOCC.Boundary
+import QCryptLean.LOCC.Boundary.DirectSum
+import QCryptLean.LOCC.Boundary.Graft
+import QCryptLean.LOCC.BoundaryKeyLayout.Basic
+import QCryptLean.LOCC.Instrument
+import QCryptLean.LOCC.Instrument.Classical
+import QCryptLean.LOCC.LocalAction
+import QCryptLean.LOCC.MultipartiteSystem
+import QCryptLean.LOCC.Program
+import QCryptLean.LOCC.Program.Classical
+import QCryptLean.LOCC.Program.Denotation
+import QCryptLean.LOCC.Program.ExitWeight
+import QCryptLean.LOCC.SystemPresentation
+import QCryptLean.LOCC.TwoParty
+import QCryptLean.QKD.Acceptance
+import QCryptLean.QKD.BB84.ClassicalData
+import QCryptLean.QKD.BB84.CompleteOutput
+import QCryptLean.QKD.BB84.ErrorCorrection
+import QCryptLean.QKD.BB84.FinalStage
+import QCryptLean.QKD.BB84.KeyHash
+import QCryptLean.QKD.BB84.Measurement.LatePublicControl
+import QCryptLean.QKD.BB84.Measurement.Records
+import QCryptLean.QKD.BB84.Measurement.Schedule
+import QCryptLean.QKD.BB84.Measurement.SelectedRecords
+import QCryptLean.QKD.BB84.Parameters
+import QCryptLean.QKD.BB84.Program
+import QCryptLean.QKD.BB84.Reduction.BasisErasure
+import QCryptLean.QKD.BB84.Reduction.ClassicalTail
+import QCryptLean.QKD.BB84.Reduction.PackedSelector
+import QCryptLean.QKD.BB84.Registers
+import QCryptLean.QKD.BB84.Sampling.Basic
+import QCryptLean.QKD.BB84.Sampling.Selection
+import QCryptLean.QKD.BB84.SelectionData
+import QCryptLean.QKD.BB84.TailOutput
+import QCryptLean.QKD.BB84.TailTranscript
+import QCryptLean.QKD.KeyEnd
+import QCryptLean.QKD.OutputLayout
+import QCryptLean.QKD.OutputLayout.Graft
+import QCryptLean.QKD.Protocol
+import QCryptLean.Quantum.Operators.Basic
+
+/-! # Acceptance -/
+
+
+open Quantum.Operators (Op)
+
+open scoped Matrix BigOperators
+
+noncomputable section
+
+namespace QKD.BB84
+open LOCC
+open QKD.BB84
+open QKD.BB84.Reduction
+
+open LOCC.TwoParty
+open QKD.BB84.Measurement
+open QKD.BB84.Sampling
+open QKD.BB84.FiniteKey
+
+
+/-- **The accept flag of the real retained tail** on raw registers `x` with sampled seed pair `st`:
+the acceptance flag at `rawClassicalTailOutputPoint`, with `0` accepting. -/
+def rawClassicalTailFlag (n m ℓ ℓEV : ℕ) (peSel xSel : Fin n → Bool) (leakEC : ℕ)
+    (ec : ECScheme n peSel leakEC) (δ Q : ℝ) (x : (FinalStage.rawSystem n).total)
+    (st : KeyHashSeedPairEV n ℓ ℓEV peSel) : Fin 2 :=
+  let d := rawClassicalTailDataOf n m ℓ ℓEV peSel leakEC ec x st
+  (Equiv.boolNot.trans finTwoEquiv.symm)
+    (QKD.BB84.acceptFlag n m ℓEV peSel xSel leakEC ec δ Q d.alicePE d.bobPE d.seedPair.2
+      d.evTag d.syndrome (x .bob))
+
+/-- **The seed-averaged acceptance of the real retained tail** at raw registers `x`: the fraction of
+seed pairs at which the announced flag accepts. -/
+def rawClassicalTailAcceptFraction (n m ℓ ℓEV : ℕ) (peSel xSel : Fin n → Bool) (leakEC : ℕ)
+    (ec : ECScheme n peSel leakEC) (δ Q : ℝ) (x : (FinalStage.rawSystem n).total) : ℝ :=
+  (Fintype.card (KeyHashSeedPairEV n ℓ ℓEV peSel) : ℝ)⁻¹ *
+    ∑ st, if rawClassicalTailFlag n m ℓ ℓEV peSel xSel leakEC ec δ Q x st = 0 then 1 else 0
+
+/-- The tail's acceptance fraction is a number in `[0, 1]`. -/
+theorem rawClassicalTailAcceptFraction_nonneg (n m ℓ ℓEV : ℕ) (peSel xSel : Fin n → Bool)
+    (leakEC : ℕ) (ec : ECScheme n peSel leakEC) (δ Q : ℝ)
+    (x : (FinalStage.rawSystem n).total) :
+    0 ≤ rawClassicalTailAcceptFraction n m ℓ ℓEV peSel xSel leakEC ec δ Q x := by
+  unfold rawClassicalTailAcceptFraction
+  refine mul_nonneg (inv_nonneg.mpr (Nat.cast_nonneg _)) (Finset.sum_nonneg fun _ _ => ?_)
+  split_ifs <;> norm_num
+
+/-- The tail's acceptance fraction is at most one. -/
+theorem rawClassicalTailAcceptFraction_le_one (n m ℓ ℓEV : ℕ) (peSel xSel : Fin n → Bool)
+    (leakEC : ℕ) (ec : ECScheme n peSel leakEC) (δ Q : ℝ)
+    (x : (FinalStage.rawSystem n).total) :
+    rawClassicalTailAcceptFraction n m ℓ ℓEV peSel xSel leakEC ec δ Q x ≤ 1 := by
+  unfold rawClassicalTailAcceptFraction
+  have hcard : (0 : ℝ) < Fintype.card (KeyHashSeedPairEV n ℓ ℓEV peSel) := by
+    exact_mod_cast Fintype.card_pos
+  rw [inv_mul_le_iff₀ hcard, mul_one]
+  calc
+    _ ≤ ∑ _st : KeyHashSeedPairEV n ℓ ℓEV peSel, (1 : ℝ) :=
+      Finset.sum_le_sum fun _ _ => by split_ifs <;> norm_num
+    _ = _ := by simp
+
+/-- The decision recorded at the literal final-stage output point is the flag computed from the
+announced data and Bob's raw register. -/
+theorem rawClassicalTailFinalPoint_flag (n m ℓ ℓEV : ℕ) (peSel xSel : Fin n → Bool)
+    (leakEC : ℕ) (ec : ECScheme n peSel leakEC) (δ Q : ℝ)
+    (d : ClassicalTailData n m ℓ ℓEV peSel leakEC) (x : (FinalStage.rawSystem n).total) :
+    (rawClassicalTailFinalPoint n m ℓ ℓEV peSel xSel leakEC ec δ Q d x).1.1 =
+      (Equiv.boolNot.trans finTwoEquiv.symm)
+        (QKD.BB84.acceptFlag n m ℓEV peSel xSel leakEC ec δ Q d.alicePE d.bobPE
+          d.seedPair.2 d.evTag d.syndrome (x .bob)) := by
+  dsimp only [rawClassicalTailFinalPoint, finalStagePoint]
+  split_ifs with h
+  · exact h.symm
+  · exact (Fin.eq_one_of_ne_zero _ h).symm
+
+/-- At the output point generated by raw registers `x` and seed pair `st`, the tail's output layout
+has the disposition of the announced flag. -/
+theorem rawClassicalTailOutputLayout_disposition_outputPoint (n m ℓ ℓEV : ℕ)
+    (peSel xSel : Fin n → Bool) (leakEC : ℕ) (ec : ECScheme n peSel leakEC) (δ Q : ℝ)
+    (x : (FinalStage.rawSystem n).total) (st : KeyHashSeedPairEV n ℓ ℓEV peSel) :
+    (rawClassicalTailOutputLayout n m ℓ ℓEV peSel leakEC).disposition
+        (rawClassicalTailOutputPoint n m ℓ ℓEV peSel xSel leakEC ec δ Q x st).1 =
+      FinalStage.disposition ℓ (rawClassicalTailFlag n m ℓ ℓEV peSel xSel leakEC ec δ Q x st) := by
+  simp only [rawClassicalTailOutputPoint, Boundary.graftSpaceEquiv_symm_fst]
+  refine (QKD.OutputLayout.graftFixedParties_disposition
+    (classicalPreDecisionBoundary n m ℓ ℓEV peSel leakEC) (fun _ => FinalStage.boundary ℓ)
+    (fun _ => FinalStage.outputLayout ℓ) .alice .bob (by decide)
+    (fun _ => rfl) (fun _ => rfl) _ _).trans ?_
+  exact congrArg (FinalStage.disposition ℓ)
+    (rawClassicalTailFinalPoint_flag n m ℓ ℓEV peSel xSel leakEC ec δ Q _ x)
+
+/-- **Acceptance of the real retained tail on any input.**  The tail dephases the raw registers and
+pushes each raw diagonal entry to its output points with the uniform seed weight
+(`rawClassicalTailProgram_output_apply`); the accepting output points of raw registers `x` are
+those whose seed pair makes the announced flag accept. -/
+theorem rawClassicalTail_acceptWeight_apply (n m ℓ ℓEV : ℕ) (peSel xSel : Fin n → Bool)
+    (leakEC : ℕ) (ec : ECScheme n peSel leakEC) (δ Q : ℝ)
+    (τ : Op (FinalStage.rawSystem n).total) :
+    (rawClassicalTailOutputLayout n m ℓ ℓEV peSel leakEC).toBoundaryKeyLayout.acceptWeight
+        ((Matrix.reindexLinearEquiv ℂ ℂ (rawClassicalTailOutputEquiv n m ℓ ℓEV peSel xSel leakEC ec
+          δ Q) (rawClassicalTailOutputEquiv n m ℓ ℓEV peSel xSel leakEC ec δ Q)).toLinearMap
+          ((classicalTail n m ℓ ℓEV peSel xSel leakEC ec δ Q).denote τ)) =
+      ∑ x, rawClassicalTailAcceptFraction n m ℓ ℓEV peSel xSel leakEC ec δ Q x * (τ x x).re := by
+  classical
+  have hdiag (q : (rawClassicalTailBoundary n m ℓ ℓEV peSel leakEC).space) :
+      (Matrix.reindexLinearEquiv ℂ ℂ (rawClassicalTailOutputEquiv n m ℓ ℓEV peSel xSel leakEC ec δ
+        Q) (rawClassicalTailOutputEquiv n m ℓ ℓEV peSel xSel leakEC ec δ Q)).toLinearMap
+        ((classicalTail n m ℓ ℓEV peSel xSel leakEC ec δ Q).denote τ) q q =
+        ∑ y : (FinalStage.rawSystem n).total × KeyHashSeedPairEV n ℓ ℓEV peSel,
+          if rawClassicalTailOutputPoint n m ℓ ℓEV peSel xSel leakEC ec δ Q y.1 y.2 = q then
+            (((Fintype.card (KeyHashSeedPairEV n ℓ ℓEV peSel) : ℝ)⁻¹ : ℝ) : ℂ) *
+              τ y.1 y.1
+          else 0 := by
+    rw [rawClassicalTailProgram_output_apply, ite_eq_left rfl, ← Fintype.sum_prod_type']
+    push_cast
+    rfl
+  rw [BoundaryKeyLayout.acceptWeight, Boundary.exitWeight_eq_sum_of_diag _ _ _ _ _ hdiag,
+    Fintype.sum_prod_type]
+  refine Finset.sum_congr rfl fun x _ => ?_
+  rw [rawClassicalTailAcceptFraction, Finset.mul_sum, Finset.sum_mul]
+  refine Finset.sum_congr rfl fun st _ => ?_
+  rw [QKD.OutputLayout.toBoundaryKeyLayout_disposition,
+    rawClassicalTailOutputLayout_disposition_outputPoint, Complex.re_ofReal_mul]
+  by_cases hflag : rawClassicalTailFlag n m ℓ ℓEV peSel xSel leakEC ec δ Q x st = 0
+  · simp [hflag, FinalStage.disposition]
+  · simp [hflag, FinalStage.disposition]
+
+
+/-- At the literal exit of a quota-feasible control, the late-public-control stage ends at the
+selected-record multipartite system. -/
+theorem lateSelectionBoundary_system_success (N nK mZ mX : ℕ) (ω : RawControl N)
+    (h : HasQuotas nK mZ mX ω) :
+    (lateSelectionBoundary N nK mZ mX).system (lateSelectionExit N nK mZ mX ω) =
+      weightedSelectedRecordSystem N (nK + mZ + mX) := by
+  rcases ω with ⟨a, b, order⟩
+  change (lateSelectionLeaf N nK mZ mX ⟨a, b, order⟩).system _ = _
+  exact (lateSelectionLeaf_system N nK mZ mX ⟨a, b, order⟩ _).trans (ite_eq_left h)
+
+/-- A selected-record point of a quota-feasible control is the literal exit of that control with
+the selected records transported along `lateSelectionBoundary_system_success`. -/
+theorem lateSelectionSuccessAt_eq (N nK mZ mX : ℕ) (ω : RawControl N)
+    (h : HasQuotas nK mZ mX ω)
+    (r : SelectedLocalRecord N (nK + mZ + mX) × SelectedLocalRecord N (nK + mZ + mX)) :
+    lateSelectionSuccessAt N nK mZ mX ω h r =
+      ⟨lateSelectionExit N nK mZ mX ω,
+        (Equiv.cast (congrArg MultipartiteSystem.total
+          (lateSelectionBoundary_system_success N nK mZ
+          mX ω h))).symm
+          ((TwoParty.pairEquiv _ _).symm r)⟩ := by
+  have hSystem := lateSelectionBoundary_system_success N nK mZ mX ω h
+  rcases ω with ⟨a, b, order⟩
+  have hleaf : lateSelectionLeaf N nK mZ mX ⟨a, b, order⟩ =
+      .leaf (weightedSelectedRecordSystem N (nK + mZ + mX)) := by
+    simp [lateSelectionLeaf, h]
+  let z : (lateSelectionLeaf N nK mZ mX ⟨a, b, order⟩).space :=
+    cast (congrArg Boundary.space hleaf.symm)
+      ((Boundary.leafSpaceEquiv (weightedSelectedRecordSystem N (nK + mZ + mX))).symm
+        ((TwoParty.pairEquiv _ _).symm r))
+  change (⟨⟨a, b, order, z.1⟩, z.2⟩ : (lateSelectionBoundary N nK mZ mX).space) = _
+  have hExit : Subsingleton (lateSelectionLeaf N nK mZ mX ⟨a, b, order⟩).Exit := by
+    rw [hleaf]
+    infer_instance
+  have castBoundarySnd {B C : Boundary Party} (hBC : B = C) (z : B.space) :
+      (cast (congrArg Boundary.space hBC) z).2 ≍ z.2 := by
+    cases hBC
+    rfl
+  have castSymm {α β : Type} (e : α = β) (x : β) : (Equiv.cast e).symm x ≍ x := by
+    subst e
+    rfl
+  -- The leaf exit is unique; the records agree up to the two casts.
+  refine Sigma.ext (congrArg
+    (fun e : (lateSelectionLeaf N nK mZ mX ⟨a, b, order⟩).Exit =>
+      (⟨a, b, order, e⟩ : (lateSelectionBoundary N nK mZ mX).Exit))
+    (Subsingleton.elim _ _)) ?_
+  exact ((castBoundarySnd hleaf.symm _).trans (castSymm (congrArg MultipartiteSystem.total hSystem)
+      _).symm)
+
+/-- Basis erasure feeds the actual classical tail its raw diagonal. -/
+theorem successfulCompleteContinuation_acceptWeight (N nK mZ mX ℓ ℓEV leakEC : ℕ)
+    (ec : ECScheme (nK + mZ + mX) (@Sampling.packedPESel nK mZ mX) leakEC) (δ Q : ℝ)
+    (σ : Op (weightedSelectedRecordSystem N (nK + mZ + mX)).total) :
+    (rawClassicalTailOutputLayout (nK + mZ + mX) (mZ + mX) ℓ ℓEV
+        (@Sampling.packedPESel nK mZ mX) leakEC).toBoundaryKeyLayout.acceptWeight
+        ((Matrix.reindexLinearEquiv ℂ ℂ (rawClassicalTailOutputEquiv (nK + mZ + mX) (mZ + mX) ℓ ℓEV
+          packedPESel packedXSel leakEC ec δ Q) (rawClassicalTailOutputEquiv (nK + mZ + mX) (mZ +
+            mX) ℓ ℓEV
+          packedPESel packedXSel leakEC ec δ Q)).toLinearMap
+        ((classicalTail (nK + mZ + mX) (mZ + mX) ℓ ℓEV
+          packedPESel packedXSel leakEC ec δ Q).denote
+          ((forgetBobBases N (nK + mZ + mX)).successorOperation ()
+            ((forgetAliceBases N (nK + mZ + mX)).successorOperation () σ)))) =
+      ∑ x, rawClassicalTailAcceptFraction (nK + mZ + mX) (mZ + mX) ℓ ℓEV
+          (@Sampling.packedPESel nK mZ mX) (@Sampling.packedXSel nK mZ mX) leakEC ec δ Q x *
+        ((forgetBobBases N (nK + mZ + mX)).successorOperation ()
+          ((forgetAliceBases N (nK + mZ + mX)).successorOperation () σ) x x).re := by
+  exact rawClassicalTail_acceptWeight_apply _ _ _ _ _ _ _ _ _ _ _
+
+
+/-- Acceptance after successful selection is the weighted raw-bit acceptance of its records. -/
+theorem completeContinuation_acceptWeight_success (pA pB : PMF Basis)
+    (N nK mZ mX ℓ ℓEV leakEC : ℕ)
+    (ec : ECScheme (nK + mZ + mX) (@Sampling.packedPESel nK mZ mX) leakEC) (δ Q : ℝ)
+    (ρ : Op (weightedStreamSystem Unit N).total) (ω : RawControl N) (h : HasQuotas nK mZ mX ω) :
+    (rawClassicalTailOutputLayout (nK + mZ + mX) (mZ + mX) ℓ ℓEV
+      packedPESel leakEC).toBoundaryKeyLayout.acceptWeight
+        ((Matrix.reindexLinearEquiv ℂ ℂ (rawClassicalTailOutputEquiv (nK + mZ + mX) (mZ + mX) ℓ ℓEV
+          packedPESel packedXSel leakEC ec δ Q) (rawClassicalTailOutputEquiv (nK + mZ + mX) (mZ +
+            mX) ℓ ℓEV
+          packedPESel packedXSel leakEC ec δ Q)).toLinearMap
+          ((classicalTail (nK + mZ + mX) (mZ + mX) ℓ ℓEV packedPESel packedXSel
+            leakEC ec δ Q).denote
+            ((forgetBobBases N (nK + mZ + mX)).successorOperation ()
+              ((forgetAliceBases N (nK + mZ + mX)).successorOperation ()
+                (selectedControlState pA pB N nK mZ mX ω h ρ))))) =
+      ∑ r : SelectedLocalRecord N (nK + mZ + mX) × SelectedLocalRecord N (nK + mZ + mX),
+        rawClassicalTailAcceptFraction (nK + mZ + mX) (mZ + mX) ℓ ℓEV
+            (@Sampling.packedPESel nK mZ mX) (@Sampling.packedXSel nK mZ mX) leakEC ec δ Q
+            ((TwoParty.pairEquiv _ _).symm (r.1.2, r.2.2)) *
+          (selectedControlState pA pB N nK mZ mX ω h ρ
+            ((TwoParty.pairEquiv _ _).symm r) ((TwoParty.pairEquiv _ _).symm r)).re := by
+  refine (rawClassicalTail_acceptWeight_apply _ _ _ _ _ _ _ _ _ _ _).trans ?_
+  refine (Finset.sum_congr rfl (fun x _ => congrArg (fun v : ℂ =>
+    rawClassicalTailAcceptFraction (nK + mZ + mX) (mZ + mX) ℓ ℓEV
+      packedPESel packedXSel leakEC ec δ Q x * v.re)
+      (forgetAliceBases_forgetBobBases_denote_diag N (nK + mZ + mX)
+        (selectedControlState pA pB N nK mZ mX ω h ρ) x))).trans ?_
+  have hpair (x : (FinalStage.rawSystem (nK + mZ + mX)).total) (a b : Bits (nK + mZ + mX)) :
+      (x .alice = a ∧ x .bob = b) ↔ x = (TwoParty.pairEquiv _ _).symm (a, b) := by
+    constructor
+    · rintro ⟨ha, hb⟩
+      apply (TwoParty.pairEquiv _ _).injective
+      simp [TwoParty.pairEquiv, ha, hb]
+    · rintro rfl
+      exact ⟨rfl, rfl⟩
+  simp_rw [hpair, Complex.re_sum, apply_ite Complex.re, Complex.zero_re, Finset.mul_sum,
+    mul_ite, mul_zero]
+  rw [Finset.sum_comm]
+  refine (Finset.sum_congr rfl fun qB _ => ?_).trans (Fintype.sum_prod_type_right _).symm
+  rw [Finset.sum_comm]
+  refine Finset.sum_congr rfl fun qA _ => ?_
+  rw [Finset.sum_ite_eq']
+  simp
+
+
+/-- The measurement phase passes acceptance to its continuation on the completed-record state. -/
+theorem measureRounds_acceptWeight (pA pB : PMF Basis) (F : Type)
+    [Fintype F] [DecidableEq F] (N : ℕ)
+    (k : Program (weightedStreamSystem (finishAcc F N) 0) (KeyEnd Party.alice Party.bob))
+    (rho : Op (weightedStreamSystem F N).total) :
+    ((measureRounds pA pB F N k).outputLayout (by decide)).toBoundaryKeyLayout.acceptWeight
+      ((measureRounds pA pB F N k).denote rho) =
+        (k.outputLayout (by decide)).toBoundaryKeyLayout.acceptWeight
+          (k.denote (measurementState pA pB F N rho)) := by
+  classical
+  let h := measureRounds_boundary pA pB F N k
+  let E := Equiv.cast (congrArg Boundary.space h)
+  have hM := LinearMap.congr_fun (measureRounds_then_denote pA pB F N k) rho
+  have hfst {B C : Boundary Party} (h : B = C) (q : C.space) :
+      ((Equiv.cast (congrArg Boundary.space h)).symm q).1 =
+        cast (congrArg Boundary.Exit h.symm) q.1 := by
+    subst h
+    rfl
+  unfold BoundaryKeyLayout.acceptWeight Boundary.exitWeight
+  rw [← E.symm.sum_comp]
+  apply Finset.sum_congr rfl
+  intro q _
+  change (if ((measureRounds pA pB F N k).terminal (E.symm q).1).disposition ≠ .abort
+    then ((measureRounds pA pB F N k).denote rho (E.symm q) (E.symm q)).re else 0) =
+      if (k.terminal q.1).disposition ≠ .abort
+      then (k.denote (measurementState pA pB F N rho) q q).re else 0
+  rw [hfst h q, measureRounds_terminal pA pB F N k
+    (fun _ t => t.disposition)]
+  exact if_congr Iff.rfl (congrArg Complex.re (congrFun (congrFun hM q) q)) rfl
+
+/-- Public basis and ordering announcements sum the acceptance weights of their continuations. -/
+theorem construction_public_acceptWeight (N : ℕ)
+      (k : RawControl N → Program (system (CompletedLocalRecord N) (CompletedLocalRecord N))
+        (KeyEnd Party.alice Party.bob))
+      (rho : Op (system (CompletedLocalRecord N) (CompletedLocalRecord N)).total) :
+      (((announceAliceBases N).then fun a => (announceBobBases N).then fun b =>
+        (announceShuffle a b).then fun order => k ⟨a, b, order⟩).outputLayout
+          (by decide)).toBoundaryKeyLayout.acceptWeight
+        (((announceAliceBases N).then fun a => (announceBobBases N).then fun b =>
+          (announceShuffle a b).then fun order => k ⟨a, b, order⟩).denote rho) =
+      ∑ omega : RawControl N,
+        ((k omega).outputLayout (by decide)).toBoundaryKeyLayout.acceptWeight
+          ((k omega).denote ((announceShuffle omega.a omega.b).successorOperation
+            omega.order ((announceBobBases N).successorOperation omega.b
+              ((announceAliceBases N).successorOperation omega.a rho)))) := by
+  classical
+  have hAnnounce {R : MultipartiteSystem Party} {Y : Type} [Fintype Y] [DecidableEq Y]
+      (a : AnnouncedAction R Y) (e : a.Outcome ≃ Y) (he : ∀ o, a.announce o = e o)
+      (k : ∀ y, Program (SystemPresentation.update R a.actor (a.Output y))
+        (KeyEnd Party.alice Party.bob)) (rho : Op R.total) :
+      ((a.then k).outputLayout (by decide)).toBoundaryKeyLayout.acceptWeight
+        ((a.then k).denote rho) =
+      ∑ o, ((k (a.announce o)).outputLayout (by decide)).toBoundaryKeyLayout.acceptWeight
+        ((k (a.announce o)).denote (a.successorOperation o rho)) :=
+    Program.exitWeight_announced_denote a e he k
+      (fun y f => ((k y).terminal f).disposition ≠ .abort) rho
+  refine (hAnnounce (announceAliceBases (B := CompletedLocalRecord N) N)
+    (Equiv.refl _) (fun _ => rfl)
+    (fun a => (announceBobBases N).then fun b =>
+      (announceShuffle a b).then fun order => k ⟨a, b, order⟩) rho).trans ?_
+  rw [← (rawControlEquivSigma N).symm.sum_comp, Fintype.sum_sigma]
+  apply Finset.sum_congr rfl
+  intro a _
+  refine (hAnnounce (announceBobBases (A := CompletedLocalRecord N) N)
+    (Equiv.refl _) (fun _ => rfl)
+    (fun b => (announceShuffle a b).then fun order => k ⟨a, b, order⟩)
+    ((announceAliceBases N).successorOperation a rho)).trans ?_
+  rw [Fintype.sum_sigma]
+  apply Finset.sum_congr rfl
+  intro b _
+  refine (hAnnounce (announceShuffle (B := CompletedLocalRecord N) a b)
+    (Equiv.refl _) (fun _ => rfl) (fun order => k ⟨a, b, order⟩)
+    ((announceBobBases N).successorOperation b
+      ((announceAliceBases N).successorOperation a rho))).trans ?_
+  rfl
+
+
+/-- **Acceptance weight of the measure-first experiment on any input operator.**
+
+The acceptance weight is the sum, over the quota-feasible public controls `ω` and over the
+selected records `r`, of the real tail's acceptance of the selected bits of `r` weighted by the
+diagonal entry of the late-public-control stage output at the selected-record point of `r`.
+Controls failing a quota contribute nothing.  No positivity, normalization or product structure of
+the input is used; zero-mass controls appear with zero weight rather than being excluded.
+For a density operator this weight is the acceptance probability. -/
+theorem protocol_acceptProbability (pA pB : PMF Basis)
+    (N nK mZ mX ℓ ℓEV leakEC : ℕ)
+    (ec : ECScheme (nK + mZ + mX) (@Sampling.packedPESel nK mZ mX) leakEC) (δ Q : ℝ)
+    (ρ : Op (weightedStreamSystem Unit N).total) :
+    (protocol pA pB N nK mZ mX ℓ ℓEV leakEC ec δ Q).acceptProbability ρ =
+      ∑ ω : RawControl N, if h : HasQuotas nK mZ mX ω then
+        ∑ r : SelectedLocalRecord N (nK + mZ + mX) × SelectedLocalRecord N (nK + mZ + mX),
+          rawClassicalTailAcceptFraction (nK + mZ + mX) (mZ + mX) ℓ ℓEV
+              (@Sampling.packedPESel nK mZ mX) (@Sampling.packedXSel nK mZ mX) leakEC ec δ Q
+              ((TwoParty.pairEquiv _ _).symm (r.1.2, r.2.2)) *
+            (selectedControlState pA pB N nK mZ mX ω h ρ
+              ((TwoParty.pairEquiv _ _).symm r) ((TwoParty.pairEquiv _ _).symm r)).re
+      else 0 := by
+  classical
+  have hPrivate {A B C D : Type}
+      [Nonempty A] [Fintype A] [DecidableEq A] [Nonempty B] [Fintype B] [DecidableEq B]
+      [Nonempty C] [Fintype C] [DecidableEq C] [Nonempty D] [Fintype D] [DecidableEq D]
+      (I : Instrument A C Unit) (J : Instrument B D Unit)
+      (k : Program (system C D) (KeyEnd Party.alice Party.bob)) (rho : Op (system A B).total) :
+      (((PrivateAction.ofInstrument (R := system A B) .alice I).then <|
+        (PrivateAction.ofInstrument (R := system C B) .bob J).then k).outputLayout
+          (by decide)).toBoundaryKeyLayout.acceptWeight
+        (((PrivateAction.ofInstrument (R := system A B) .alice I).then <|
+          (PrivateAction.ofInstrument (R := system C B) .bob J).then k).denote rho) =
+      (k.outputLayout (by decide)).toBoundaryKeyLayout.acceptWeight
+        (k.denote
+          ((PrivateAction.ofInstrument (R := system C B) .bob J).successorOperation ()
+          ((PrivateAction.ofInstrument (R := system A B) .alice I).successorOperation ()
+            rho))) := by
+    exact congrArg (k.outputLayout (by decide)).toBoundaryKeyLayout.acceptWeight
+      (funext fun q => funext fun q' => private_pair_denote_apply I J k rho q q')
+  have hTail (sigma : Op (FinalStage.rawSystem (nK + mZ + mX)).total) :
+      ((classicalTail (nK + mZ + mX) (mZ + mX) ℓ ℓEV packedPESel packedXSel
+        leakEC ec δ Q).outputLayout (by decide)).toBoundaryKeyLayout.acceptWeight
+        ((classicalTail (nK + mZ + mX) (mZ + mX) ℓ ℓEV packedPESel packedXSel
+          leakEC ec δ Q).denote sigma) =
+      (rawClassicalTailOutputLayout (nK + mZ + mX) (mZ + mX) ℓ ℓEV
+        packedPESel leakEC).toBoundaryKeyLayout.acceptWeight
+        ((Matrix.reindexLinearEquiv ℂ ℂ (rawClassicalTailOutputEquiv (nK + mZ + mX) (mZ + mX) ℓ ℓEV
+          packedPESel packedXSel leakEC ec δ Q) (rawClassicalTailOutputEquiv (nK + mZ + mX) (mZ +
+            mX) ℓ ℓEV
+          packedPESel packedXSel leakEC ec δ Q)).toLinearMap
+          ((classicalTail (nK + mZ + mX) (mZ + mX) ℓ ℓEV packedPESel packedXSel
+            leakEC ec δ Q).denote sigma)) := by
+    symm
+    apply Boundary.exitWeight_reindexOp
+    intro q
+    exact Iff.of_eq (congrArg (fun d : BoundaryKeyLayout.Disposition => d ≠ .abort)
+      (rawClassicalTailOutputEquiv_disposition _ _ _ _ _ _ _ _ _ _ q).symm)
+  change ((construction pA pB N nK mZ mX ℓ ℓEV leakEC ec δ Q).outputLayout
+    (by decide)).toBoundaryKeyLayout.acceptWeight
+      ((construction pA pB N nK mZ mX ℓ ℓEV leakEC ec δ Q).denote ρ) = _
+  unfold construction
+  rw [measureRounds_acceptWeight]
+  let k (control : RawControl N) :
+      Program (system (CompletedLocalRecord N) (CompletedLocalRecord N))
+        (KeyEnd Party.alice Party.bob) :=
+    if h : HasQuotas nK mZ mX control then
+      (retainAlice (selectedEmbedding control h)).then <|
+        (retainBob (selectedEmbedding control h)).then <|
+          (forgetAliceBases N (nK + mZ + mX)).then <|
+            (forgetBobBases N (nK + mZ + mX)).then <|
+              classicalTail (nK + mZ + mX) (mZ + mX) ℓ ℓEV
+                packedPESel packedXSel leakEC ec δ Q
+    else discardAlice.then (discardBob.then (.done KeyEnd.abort))
+  refine (construction_public_acceptWeight N k (measurementState pA pB Unit N ρ)).trans ?_
+  apply Finset.sum_congr rfl
+  intro omega _
+  let sigma := (announceShuffle (B := CompletedLocalRecord N) omega.a omega.b).successorOperation
+    omega.order ((announceBobBases N).successorOperation omega.b
+      ((announceAliceBases N).successorOperation omega.a (measurementState pA pB Unit N ρ)))
+  let accept (p : Program (system (CompletedLocalRecord N) (CompletedLocalRecord N))
+      (KeyEnd Party.alice Party.bob)) :=
+    (p.outputLayout (by decide)).toBoundaryKeyLayout.acceptWeight (p.denote sigma)
+  change accept (k omega) = _
+  dsimp only [k]
+  split_ifs with h
+  · let tail := classicalTail (nK + mZ + mX) (mZ + mX) ℓ ℓEV
+      packedPESel packedXSel leakEC ec δ Q
+    refine (hPrivate
+      (Instrument.functionAndForget (selectedLocalRecord (selectedEmbedding omega h)))
+      (Instrument.functionAndForget (selectedLocalRecord (selectedEmbedding omega h)))
+      ((forgetAliceBases N (nK + mZ + mX)).then <|
+        (forgetBobBases N (nK + mZ + mX)).then tail) sigma).trans ?_
+    refine (hPrivate
+      (Instrument.functionAndForget (fun q : Measurement.SelectedLocalRecord N (nK + mZ + mX) =>
+        q.2))
+      (Instrument.functionAndForget (fun q : Measurement.SelectedLocalRecord N (nK + mZ + mX) =>
+        q.2))
+      tail (selectedControlState pA pB N nK mZ mX omega h ρ)).trans ?_
+    refine (hTail _).trans ?_
+    exact completeContinuation_acceptWeight_success pA pB N nK mZ mX ℓ ℓEV leakEC ec δ Q
+      ρ omega h
+  · apply BoundaryKeyLayout.acceptWeight_eq_zero_of_forall_abort
+    intro e
+    rfl
+
+
+/-- **An empty test block makes the real tail reject every input.**  The parameter-estimation test
+is fail-closed: with no Z-test round or no X-test round the announced flag is `1` at every raw
+register and seed pair. -/
+theorem rawClassicalTailAcceptFraction_eq_zero_of_testBlock_empty (n m ℓ ℓEV : ℕ)
+    (peSel xSel : Fin n → Bool) (leakEC : ℕ) (ec : ECScheme n peSel leakEC) (δ Q : ℝ)
+    (h : siftedZTestSampleSize peSel xSel = 0 ∨ siftedXTestSampleSize peSel xSel = 0)
+    (x : (FinalStage.rawSystem n).total) :
+    rawClassicalTailAcceptFraction n m ℓ ℓEV peSel xSel leakEC ec δ Q x = 0 := by
+  unfold rawClassicalTailAcceptFraction
+  rw [Finset.sum_eq_zero, mul_zero]
+  intro st _
+  rw [ite_eq_right]
+  simp only [rawClassicalTailFlag, QKD.BB84.acceptFlag, QKD.BB84.testsPassed]
+  rcases h with h | h <;> simp [h, finTwoEquiv]
+
+/-- With an empty Z-test or X-test block the measure-first experiment never accepts, whatever its
+input. -/
+theorem protocol_acceptProbability_eq_zero_of_testBlock_empty (pA pB : PMF Basis)
+    (N nK mZ mX ℓ ℓEV leakEC : ℕ)
+    (ec : ECScheme (nK + mZ + mX) (@Sampling.packedPESel nK mZ mX) leakEC) (δ Q : ℝ)
+    (h : mZ = 0 ∨ mX = 0) (ρ : Op (weightedStreamSystem Unit N).total) :
+    (protocol pA pB N nK mZ mX ℓ ℓEV leakEC ec δ Q).acceptProbability ρ = 0 := by
+  have hblock : siftedZTestSampleSize (@Sampling.packedPESel nK mZ mX)
+        (@Sampling.packedXSel nK mZ mX) = 0 ∨
+      siftedXTestSampleSize (@Sampling.packedPESel nK mZ mX)
+        (@Sampling.packedXSel nK mZ mX) = 0 := by
+    rwa [siftedZTestSampleSize_packed, siftedXTestSampleSize_packed]
+  rw [protocol_acceptProbability]
+  refine Finset.sum_eq_zero fun ω _ => ?_
+  split_ifs
+  · refine Finset.sum_eq_zero fun r _ => ?_
+    rw [rawClassicalTailAcceptFraction_eq_zero_of_testBlock_empty _ _ _ _ _ _ _ _ _ _ hblock,
+      zero_mul]
+  · rfl
+
+/-- A batch shorter than the total quota never accepts, whatever its input: no public control can
+select `nK + mZ + mX` distinct rounds out of `N`. -/
+theorem protocol_acceptProbability_eq_zero_of_lt (pA pB : PMF Basis)
+    (N nK mZ mX ℓ ℓEV leakEC : ℕ)
+    (ec : ECScheme (nK + mZ + mX) (@Sampling.packedPESel nK mZ mX) leakEC) (δ Q : ℝ)
+    (hN : N < nK + mZ + mX) (ρ : Op (weightedStreamSystem Unit N).total) :
+    (protocol pA pB N nK mZ mX ℓ ℓEV leakEC ec δ Q).acceptProbability ρ = 0 := by
+  rw [protocol_acceptProbability]
+  refine Finset.sum_eq_zero fun ω _ => ?_
+  rw [dite_eq_right]
+  intro h
+  have hcard := Fintype.card_le_of_injective _ (selectedEmbedding ω h).injective
+  simp only [Fintype.card_fin] at hcard
+  omega
+
+namespace Parameters
+
+variable (p : Parameters)
+
+/-- The configured experiment never accepts when one of its test blocks is empty. -/
+theorem acceptProbability_eq_zero_of_testBlock_empty (h : p.zTests = 0 ∨ p.xTests = 0)
+    (ρ : Op p.protocol.start.total) : p.protocol.acceptProbability ρ = 0 :=
+  protocol_acceptProbability_eq_zero_of_testBlock_empty _ _ _ _ _ _ _ _ _ _ _ _ h ρ
+
+/-- The configured experiment never accepts when it measures fewer rounds than it must sift. -/
+theorem acceptProbability_eq_zero_of_lt (h : p.rounds < p.sifted)
+    (ρ : Op p.protocol.start.total) : p.protocol.acceptProbability ρ = 0 :=
+  protocol_acceptProbability_eq_zero_of_lt _ _ _ _ _ _ _ _ _ _ _ _ h ρ
+
+end Parameters
+
+end QKD.BB84
